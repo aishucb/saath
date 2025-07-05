@@ -5,7 +5,11 @@ const mongoose = require('mongoose');
 
 // Route to indicate followers routing is active
 router.get('/', (req, res) => {
-  res.send('Followers routing is active');
+  res.json({ 
+    message: 'Followers routing is active',
+    version: '1.0.1',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Fetch all users, optionally excluding one by id
