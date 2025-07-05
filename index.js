@@ -56,11 +56,13 @@ const forumRoutes = require('./forumRoutes');
 const forumcommentRoutes = require('./forumcomment');
 const auth = require('./middleware/auth');
 const followersRouter = require('./followersRoutes');
+const chatRoutes = require('./chatRoutes');
 
 // Use forum routes
 app.use('/api/forum', forumRoutes);
 app.use('/api/forumcomment', forumcommentRoutes);
 app.use('/followers', followersRouter);
+app.use('/api/chat', chatRoutes);
 
 // Session middleware (required for Passport)
 app.use(session({
