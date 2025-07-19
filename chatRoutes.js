@@ -13,20 +13,28 @@ router.get('/', (req, res) => {
 });
 
 // Get chat messages between two users
-// GET /api/chat/messages?user1=...&user2=...
+// GET /api/chat/messages?user1=...&user2=...&limit=30&before=timestamp
 router.get('/messages', async (req, res) => {
-  const { user1, user2 } = req.query;
+  const { user1, user2, limit = 30, before } = req.query;
   if (!user1 || !user2) {
     return res.status(400).json({ error: 'Both user1 and user2 are required' });
   }
   try {
-    const messages = await Message.find({
+    const query = {
       $or: [
         { sender: user1, recipient: user2 },
         { sender: user2, recipient: user1 }
       ]
-    })
-      .sort({ timestamp: 1 });
+    };
+    if (before) {
+      console.log('Paginated fetch: before =', before);
+      query.timestamp = { $lt: new Date(before) };
+    }
+    console.log('Mongo query:', query);
+    let messages = await Message.find(query)
+      .sort({ timestamp: -1 })
+      .limit(Number(limit));
+    messages = messages.reverse(); // chronological order
     res.json(messages);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch messages' });
