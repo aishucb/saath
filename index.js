@@ -10,6 +10,9 @@ const { OAuth2Client } = require('google-auth-library');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const { v4: uuidv4 } = require('uuid');
+const WebSocket = require('ws');
 
 const app = express();
 const PORT = process.env.PORT || 5000; // Using port 5000 as per running instance
@@ -27,7 +30,7 @@ mongoose.connect(MONGODB_URI, {
 .catch(err => console.error('MongoDB connection error:', err));
 
 // Import models
-const { Customer, Admin, Forum } = require('./models');
+const { Customer, Admin, Forum, Message } = require('./models');
 const adminRoutes = require('./adminRoutes');
 
 // OTP Schema
@@ -405,30 +408,198 @@ app.use((req, res, next) => {
   next();
 });
 
-// Start server
-const server = app.listen(5000, () => {
-  const address = server.address();
-  if (address) {
-    console.log(`Server is running on http://localhost:${address.port}`);
-    console.log('Available endpoints:');
-    console.log(`- GET  /`);
-    console.log(`- POST /api/otp`);
-    console.log(`- POST /api/verify-otp`);
-    console.log(`- GET  /api/customer/check?phone=PHONE_NUMBER`);
+// Create HTTP server and attach Express app
+const server = http.createServer(app);
 
-    // Create middleware directory if it doesn't exist
-    const fs = require('fs');
-    const path = require('path');
+// WebSocket server setup
+const wss = new WebSocket.Server({ server });
 
-    const middlewareDir = path.join(__dirname, 'middleware');
-    if (!fs.existsSync(middlewareDir)) {
-      fs.mkdirSync(middlewareDir);
+// In-memory store for chat sessions and user connections
+const chatSessions = {}; // { sessionId: { users: [userId1, userId2], sockets: [ws1, ws2] } }
+const userSockets = {}; // { userId: ws }
+
+// API endpoint to create a chat session between two users
+app.post('/api/chat/connect', async (req, res) => {
+  const { userId1, userId2 } = req.body;
+  if (!userId1 || !userId2) {
+    return res.status(400).json({ error: 'Both user IDs are required' });
+  }
+  // Check if a session already exists for these users
+  let sessionId = Object.keys(chatSessions).find(id => {
+    const users = chatSessions[id].users;
+    return users.includes(userId1) && users.includes(userId2) && users.length === 2;
+  });
+  if (!sessionId) {
+    sessionId = uuidv4();
+    chatSessions[sessionId] = { users: [userId1, userId2], sockets: [] };
+  }
+  res.json({ sessionId });
+});
+
+// WebSocket connection handler
+wss.on('connection', (ws, req) => {
+  // Expect client to send a JSON message: { type: 'join', userId, sessionId }
+  ws.on('message', (message) => {
+    console.log('Received WebSocket message:', message); // Debug print
+    let data;
+    try {
+      data = JSON.parse(message);
+      console.log('Parsed data:', data); // Debug print
+    } catch (e) {
+      ws.send(JSON.stringify({ error: 'Invalid JSON' }));
+      return;
     }
+    // Debug logs for session and user
+    // Handle user registration for notifications
+    if (data.type === 'register' && data.userId) {
+      userSockets[data.userId] = ws;
+      ws.userId = data.userId;
+      ws.send(JSON.stringify({ type: 'registered', userId: data.userId }));
+    } else if (data.type === 'ping') {
+      // Handle heartbeat ping
+      ws.send(JSON.stringify({ type: 'pong', timestamp: new Date() }));
+    } else if (data.type === 'join' && data.userId && data.sessionId) {
+      userSockets[data.userId] = ws;
+      let session = chatSessions[data.sessionId];
+      if (!session) {
+        // If session does not exist, create it for this user and the other user if provided
+        const users = [data.userId];
+        if (data.otherUserId && data.otherUserId !== data.userId) {
+          users.push(data.otherUserId);
+        }
+        session = { users, sockets: [] };
+        chatSessions[data.sessionId] = session;
+        console.log('SERVER: Created new session in memory for sessionId', data.sessionId, 'with users', users);
+      } else {
+        // Always add the joining user if not already present
+        if (!session.users.includes(data.userId)) {
+          session.users.push(data.userId);
+        }
+        // Also add otherUserId if provided and not present
+        if (data.otherUserId && !session.users.includes(data.otherUserId)) {
+          session.users.push(data.otherUserId);
+        }
+      }
+      // Remove any existing socket for this user in ANY session
+      Object.values(chatSessions).forEach(sess => {
+        sess.sockets = sess.sockets.filter(s => s !== ws && s.userId !== data.userId);
+      });
+      ws.sessionId = data.sessionId;
+      ws.userId = data.userId;
+      session.sockets.push(ws);
+      try {
+        console.log('SERVER: About to send to client:', JSON.stringify({ type: 'joined', sessionId: data.sessionId }));
+        ws.send(JSON.stringify({ type: 'joined', sessionId: data.sessionId }));
+        console.log('SERVER: Sent to client:', JSON.stringify({ type: 'joined', sessionId: data.sessionId }));
+      } catch (err) {
+        console.error('SERVER: Error sending joined event:', err);
+      }
+      // Debug print after assignment
+      console.log('AFTER JOIN: ws.sessionId:', ws.sessionId, 'ws.userId:', ws.userId);
+      console.log('chatSessions:', chatSessions);
+    } else if (data.type === 'message' && ws.sessionId && ws.userId) {
+      // Broadcast message to the other user in the session
+      const session = chatSessions[ws.sessionId];
+      if (session) {
+        // Find recipient (the other user in the session)
+        const recipientId = session.users.find(u => u !== ws.userId);
+        // Store message in MongoDB
+        const messageDoc = new Message({
+          sender: ws.userId,
+          recipient: recipientId,
+          content: data.content,
+          replyTo: data.replyTo || null,
+          timestamp: new Date()
+        });
+        messageDoc.save()
+          .then(saved => {
+            console.log('Message saved to DB:', saved);
+          })
+          .catch(err => {
+            console.error('Error saving message:', err);
+          });
+        // Send message to ALL users in the session (including sender)
+        session.sockets.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              type: 'message',
+              from: ws.userId,
+              content: data.content,
+              replyTo: data.replyTo || null,
+              timestamp: messageDoc.timestamp
+            }));
+          }
+        });
+        // Send notification to recipient if they are connected (even if not in this session)
+        if (userSockets[recipientId] && userSockets[recipientId].readyState === WebSocket.OPEN) {
+          userSockets[recipientId].send(JSON.stringify({
+            type: 'notification',
+            from: ws.userId,
+            content: data.content,
+            replyTo: data.replyTo || null,
+            timestamp: messageDoc.timestamp
+          }));
+        }
+      }
+    }
+  });
+  ws.on('close', () => {
+    // Remove socket from ALL sessions and userSockets
+    Object.values(chatSessions).forEach(session => {
+      session.sockets = session.sockets.filter(s => s !== ws);
+    });
+    if (ws.userId && userSockets[ws.userId] === ws) {
+      delete userSockets[ws.userId];
+    }
+  });
+});
 
-    // Create auth middleware file
-    const authMiddlewarePath = path.join(middlewareDir, 'auth.js');
-    if (!fs.existsSync(authMiddlewarePath)) {
-      const authMiddlewareContent = `const jwt = require('jsonwebtoken');
+// Add a helper to wrap all ws.send calls
+function safeSend(ws, messageObj) {
+  try {
+    const msg = JSON.stringify(messageObj);
+    console.log('SERVER: About to send to client:', msg);
+    ws.send(msg);
+    console.log('SERVER: Sent to client:', msg);
+  } catch (err) {
+    console.error('SERVER: Error sending message:', err);
+  }
+}
+
+// Start the server with WebSocket support
+server.listen(PORT, () => {
+  console.log(`Server running on http://${HOST}:${PORT}`);
+  console.log('Available endpoints:');
+  console.log(`- GET  /`);
+  console.log(`- POST /api/otp`);
+  console.log(`- POST /api/verify-otp`);
+  console.log(`- GET  /api/customer/check?phone=PHONE_NUMBER`);
+  console.log(`- POST /api/chat/connect - Create a chat session`);
+
+  // Heartbeat mechanism to detect stale connections
+  setInterval(() => {
+    const now = Date.now();
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        // Send a ping to check if connection is still alive
+        client.ping();
+      }
+    });
+  }, 30000); // Check every 30 seconds
+
+  // Create middleware directory if it doesn't exist
+  const fs = require('fs');
+  const path = require('path');
+
+  const middlewareDir = path.join(__dirname, 'middleware');
+  if (!fs.existsSync(middlewareDir)) {
+    fs.mkdirSync(middlewareDir);
+  }
+
+  // Create auth middleware file
+  const authMiddlewarePath = path.join(middlewareDir, 'auth.js');
+  if (!fs.existsSync(authMiddlewarePath)) {
+    const authMiddlewareContent = `const jwt = require('jsonwebtoken');
   
 module.exports = async function(req, res, next) {
   // Get token from header
@@ -449,26 +620,23 @@ module.exports = async function(req, res, next) {
   }
 };`;
 
-      fs.writeFileSync(authMiddlewarePath, authMiddlewareContent);
-    }
-
-    // Install required packages
-    console.log('Installing required packages...');
-    const { execSync } = require('child_process');
-    try {
-      execSync('npm install jsonwebtoken bcryptjs', { stdio: 'inherit' });
-      console.log('Packages installed successfully');
-    } catch (error) {
-      console.error('Error installing packages:', error);
-    }
-
-    console.log('Admin API endpoints:');
-    console.log(`POST   /api/admin/register - Register a new admin`);
-    console.log(`POST   /api/admin/login - Login admin`);
-    console.log(`GET    /api/admin/me - Get current admin (requires x-auth-token header)`);
-  } else {
-    console.log('Server started, but address info is not available.');
+    fs.writeFileSync(authMiddlewarePath, authMiddlewareContent);
   }
+
+  // Install required packages
+  console.log('Installing required packages...');
+  const { execSync } = require('child_process');
+  try {
+    execSync('npm install jsonwebtoken bcryptjs', { stdio: 'inherit' });
+    console.log('Packages installed successfully');
+  } catch (error) {
+    console.error('Error installing packages:', error);
+  }
+
+  console.log('Admin API endpoints:');
+  console.log(`POST   /api/admin/register - Register a new admin`);
+  console.log(`POST   /api/admin/login - Login admin`);
+  console.log(`GET    /api/admin/me - Get current admin (requires x-auth-token header)`);
 });
 
 // Handle server errors

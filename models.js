@@ -45,15 +45,26 @@ const commentSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
 });
 
+// Message Schema
+const messageSchema = new mongoose.Schema({
+  sender: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
+  recipient: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
+  content: { type: String, required: true },
+  replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
+  timestamp: { type: Date, default: Date.now }
+});
+
 // Create models
 const Customer = mongoose.models.Customer || mongoose.model('Customer', customerSchema);
 const Admin = mongoose.models.Admin || mongoose.model('Admin', adminSchema);
 const Forum = mongoose.models.Forum || mongoose.model('Forum', forumSchema, 'Forum');
 const Comment = mongoose.models.Comment || mongoose.model('Comment', commentSchema);
+const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
 
 module.exports = {
   Customer,
   Admin,
   Forum,
-  Comment
+  Comment,
+  Message
 };

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { Customer } = require('./models');
+const { Message, Customer } = require('./models');
 const mongoose = require('mongoose');
 
 // Route to indicate chat routing is ready
@@ -12,72 +12,116 @@ router.get('/', (req, res) => {
   });
 });
 
-// API to get mutual connections (users who follow each other)
-router.get('/mutual-connections/:userId', async (req, res) => {
+// Get chat messages between two users
+// GET /api/chat/messages?user1=...&user2=...
+router.get('/messages', async (req, res) => {
+  const { user1, user2 } = req.query;
+  if (!user1 || !user2) {
+    return res.status(400).json({ error: 'Both user1 and user2 are required' });
+  }
   try {
-    const { userId } = req.params;
+    const messages = await Message.find({
+      $or: [
+        { sender: user1, recipient: user2 },
+        { sender: user2, recipient: user1 }
+      ]
+    })
+      .sort({ timestamp: 1 });
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// Test endpoint to check user data structure
+// GET /api/chat/test-users
+router.get('/test-users', async (req, res) => {
+  try {
+    const user1 = await Customer.findById('68735ced2dd65cb3a1d2fe8f');
+    const user2 = await Customer.findById('68735d102dd65cb3a1d2fe9a');
     
-    if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
-    }
-    
-    let objectId;
-    try {
-      objectId = new mongoose.Types.ObjectId(userId);
-    } catch (err) {
-      return res.status(400).json({ error: 'Invalid user ID format' });
-    }
-    
-    // Get the current user
-    const currentUser = await Customer.findById(objectId);
-    if (!currentUser) {
+    res.json({
+      user1: {
+        _id: user1?._id,
+        name: user1?.name,
+        followed: user1?.followed,
+        follower: user1?.follower,
+        followedTypes: user1?.followed?.map(id => typeof id),
+        followerTypes: user1?.follower?.map(id => typeof id)
+      },
+      user2: {
+        _id: user2?._id,
+        name: user2?.name,
+        followed: user2?.followed,
+        follower: user2?.follower,
+        followedTypes: user2?.followed?.map(id => typeof id),
+        followerTypes: user2?.follower?.map(id => typeof id)
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get mutual connections for a user (users who have matched)
+// GET /api/chat/mutual-connections/:userId
+router.get('/mutual-connections/:userId', async (req, res) => {
+  const { userId } = req.params;
+  
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+  
+  try {
+    // Find the user and their followers/following
+    const user = await Customer.findById(userId);
+    if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    // Get arrays of followers and following
-    const followers = currentUser.follower || [];
-    const following = currentUser.followed || [];
+    console.log('User:', user.name);
+    console.log('User followed:', user.followed);
+    console.log('User follower:', user.follower);
     
-    console.log('User ID:', userId);
-    console.log('Followers count:', followers.length);
-    console.log('Following count:', following.length);
-    console.log('Followers:', followers);
-    console.log('Following:', following);
+    // Get users who are mutual followers (both users follow each other)
+    const mutualConnections = [];
     
-    // Find common users (mutual connections)
-    const mutualConnectionIds = followers.filter(followerId => 
-      following.some(followingId => followerId.toString() === followingId.toString())
-    );
+    // Check each user that the current user follows
+    for (const followedUserId of user.followed) {
+      const followedUser = await Customer.findById(followedUserId);
+      if (followedUser) {
+        console.log('Checking user:', followedUser.name);
+        console.log('Their followed:', followedUser.followed);
+        console.log('Looking for userId:', userId);
+        
+        // Check if the followed user also follows the current user
+        const isMutual = followedUser.followed.some(id => id.toString() === userId.toString());
+        console.log('Is mutual:', isMutual);
+        
+        if (isMutual) {
+          // This is a mutual connection (both users follow each other)
+          mutualConnections.push({
+            _id: followedUser._id,
+            name: followedUser.name || 'Unknown User',
+            picture: followedUser.picture,
+            email: followedUser.email,
+            phone: followedUser.phone,
+          });
+        }
+      }
+    }
     
-    console.log('Mutual connection IDs:', mutualConnectionIds);
-    
-    // Get details of mutual connection users
-    const mutualConnections = await Customer.find({ 
-      _id: { $in: mutualConnectionIds } 
-    }).select('name email phone profilePicture bio');
-    
-    console.log('Found mutual connections:', mutualConnections.length);
+    console.log('Final mutual connections:', mutualConnections);
     
     res.json({
       success: true,
       data: {
-        userId: userId,
-        userName: currentUser.name,
-        mutualConnections: mutualConnections,
-        stats: {
-          totalFollowers: followers.length,
-          totalFollowing: following.length,
-          mutualConnections: mutualConnections.length
-        }
+        mutualConnections: mutualConnections
       }
     });
-    
   } catch (err) {
     console.error('Error fetching mutual connections:', err);
-    res.status(500).json({ 
-      error: 'Failed to fetch mutual connections', 
-      details: err.message 
-    });
+    res.status(500).json({ error: 'Failed to fetch mutual connections' });
   }
 });
 
