@@ -1,43 +1,108 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 
 // Import models
 const { Event, Customer } = require('./models');
 
 // Authentication middleware for customers
 const customerAuth = async (req, res, next) => {
+    const requestId = Math.random().toString(36).substring(2, 8);
+    console.log(`[${requestId}] Customer auth check for: ${req.method} ${req.path}`);
+    
     try {
+        // Get token from header
         const authHeader = req.header('Authorization');
         
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        if (!authHeader) {
+            console.log(`[${requestId}] No authorization header`);
             return res.status(401).json({ 
                 success: false, 
                 message: 'No token provided'
             });
         }
 
-        const token = authHeader.replace('Bearer ', '').trim();
-        
-        // For now, we'll use a simple customer ID from token
-        // In a real app, you'd verify JWT token
-        const customerId = token; // Simplified for demo
-        
-        const customer = await Customer.findById(customerId);
-        if (!customer) {
+        if (!authHeader.startsWith('Bearer ')) {
+            console.log(`[${requestId}] Invalid token format`);
             return res.status(401).json({ 
                 success: false, 
-                message: 'Customer not found' 
+                message: 'Invalid token format'
             });
         }
+
+        const token = authHeader.replace('Bearer ', '').trim();
         
-        req.customer = customer;
-        next();
-    } catch (error) {
-        console.error('Customer auth error:', error);
-        res.status(401).json({ 
-            success: false, 
-            message: 'Authentication failed'
+        try {
+            // Verify JWT token
+            console.log(`🔍 [${requestId}] Verifying customer token...`);
+            console.log(`🔍 [${requestId}] JWT_SECRET: ${process.env.JWT_SECRET ? 'Set' : 'Using default'}`);
+            console.log(`🔍 [${requestId}] Token preview: ${token.substring(0, 50)}...`);
+            
+            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
+            
+            console.log(`✅ [${requestId}] Token verified`);
+            console.log(`🔍 [${requestId}] Decoded token payload:`, decoded);
+            
+            // Get customer ID from various possible locations in the token
+            const customerId = decoded._id || 
+                              (decoded.customer && decoded.customer.id) || 
+                              decoded.id || 
+                              (decoded.customer && decoded.customer._id) ||
+                              decoded.customerId;
+
+            console.log(`🔍 [${requestId}] Extracted customer ID:`, customerId);
+
+            if (!customerId) {
+                const error = new Error('No customer ID found in token');
+                console.error(`❌ [${requestId}] ${error.message}`);
+                return res.status(401).json({ 
+                    success: false, 
+                    message: 'Customer not found' 
+                });
+            }
+            
+            // Find customer by ID
+            const customer = await Customer.findById(customerId);
+            if (!customer) {
+                console.log(`[${requestId}] Customer not found for ID:`, customerId);
+                return res.status(401).json({ 
+                    success: false, 
+                    message: 'Customer not found' 
+                });
+            }
+            
+            // Attach customer to request
+            req.customer = customer;
+            req.requestId = requestId;
+            
+            console.log(`[${requestId}] Authenticated as customer:`, customer.email || customer.phone);
+            next();
+        } catch (error) {
+            console.error(`[${requestId}] Auth failed:`, error.message);
+            
+            const errorMessage = error.name === 'TokenExpiredError' 
+                ? 'Token has expired' 
+                : 'Invalid token';
+            
+            return res.status(401).json({ 
+                success: false, 
+                message: errorMessage
+            });
+        }
+    } catch (err) {
+        console.error(`❌ [${requestId || 'unknown'}] Unexpected error in customer auth middleware:`, {
+            message: err.message,
+            name: err.name,
+            stack: err.stack
+        });
+        
+        res.status(500).json({
+            success: false,
+            message: 'Authentication failed',
+            error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+            requestId: requestId || 'unknown',
+            timestamp: new Date().toISOString()
         });
     }
 };
@@ -58,6 +123,12 @@ const registrationSchema = new mongoose.Schema({
         name: { type: String, required: true },
         price: { type: Number, required: true },
         description: { type: String }
+    },
+    attendeeCount: { 
+        type: Number, 
+        required: true, 
+        default: 1,
+        min: 1 
     },
     appliedDiscount: {
         name: { type: String },
@@ -95,6 +166,19 @@ const registrationSchema = new mongoose.Schema({
 // Create Registration model
 const Registration = mongoose.models.Registration || mongoose.model('Registration', registrationSchema);
 
+// Debug endpoint to test authentication
+router.post('/debug', customerAuth, async (req, res) => {
+  res.json({ 
+    success: true, 
+    message: 'Authentication successful',
+    customer: {
+      id: req.customer._id,
+      email: req.customer.email,
+      phone: req.customer.phone
+    }
+  });
+});
+
 // @route   POST /api/event-registrations
 // @desc    Register for an event
 // @access  Private (Customer)
@@ -103,6 +187,7 @@ router.post('/', customerAuth, async (req, res) => {
         const {
             eventId,
             pricingTierName,
+            attendeeCount = 1, // Default to 1 if not provided
             appliedDiscountName,
             specialRequests
         } = req.body;
@@ -115,10 +200,10 @@ router.post('/', customerAuth, async (req, res) => {
             });
         }
 
-        // Check if event exists and is published
+        // Check if event exists and is published (or draft for development)
         const event = await Event.findOne({ 
             _id: eventId, 
-            status: 'published' 
+            status: { $in: ['published', 'draft'] } // Allow draft events for development
         });
 
         if (!event) {
@@ -145,11 +230,11 @@ router.post('/', customerAuth, async (req, res) => {
             });
         }
 
-        // Check if slots are available
-        if (pricingTier.slotsAvailable <= 0) {
+        // Check if slots are available for the requested number of attendees
+        if (pricingTier.slotsAvailable < attendeeCount) {
             return res.status(400).json({
                 success: false,
-                message: 'No slots available for this pricing tier'
+                message: `Only ${pricingTier.slotsAvailable} slots available, but ${attendeeCount} requested`
             });
         }
 
@@ -167,8 +252,8 @@ router.post('/', customerAuth, async (req, res) => {
             });
         }
 
-        // Calculate pricing with discount
-        let finalPrice = pricingTier.price;
+        // Calculate pricing with discount for multiple attendees
+        let finalPrice = pricingTier.price * attendeeCount;
         let appliedDiscount = null;
 
         if (appliedDiscountName) {
@@ -177,8 +262,8 @@ router.post('/', customerAuth, async (req, res) => {
                 appliedDiscount = {
                     name: discountOption.name,
                     percentageDiscount: discountOption.percentageDiscount,
-                    originalPrice: pricingTier.price,
-                    finalPrice: pricingTier.price * (1 - discountOption.percentageDiscount / 100)
+                    originalPrice: pricingTier.price * attendeeCount,
+                    finalPrice: (pricingTier.price * attendeeCount) * (1 - discountOption.percentageDiscount / 100)
                 };
                 finalPrice = appliedDiscount.finalPrice;
             }
@@ -195,13 +280,14 @@ router.post('/', customerAuth, async (req, res) => {
             },
             appliedDiscount,
             specialRequests,
-            finalPrice
+            finalPrice,
+            attendeeCount // Add attendee count to registration
         });
 
         await registration.save();
 
         // Update event slots
-        pricingTier.slotsAvailable -= 1;
+        pricingTier.slotsAvailable -= attendeeCount;
         await event.save();
 
         // Populate event details

@@ -5,6 +5,106 @@ const mongoose = require('mongoose');
 // Import models
 const { Event, Customer } = require('./models');
 
+// Registration model is defined in eventRegistrationRoutes.js
+// We can access it via mongoose.model('Registration')
+
+// @route   GET /api/events/test
+// @desc    Get all future events regardless of status (for debugging)
+// @access  Public
+router.get('/test', async (req, res) => {
+    try {
+        // Get only future events
+        const now = new Date();
+        const events = await Event.find({
+            date: { $gt: now } // Only events with date greater than now
+        })
+            .populate('createdBy', 'name email')
+            .select('-attendees')
+            .sort({ date: 1 }); // Sort by date ascending
+
+        // Calculate attendees count for each event
+        const eventsWithAttendeesCount = await Promise.all(events.map(async (event) => {
+            const eventObj = event.toObject();
+            
+            // Count total attendees from registrations
+            const registrations = await mongoose.model('Registration').find({
+                eventId: event._id,
+                status: { $in: ['pending', 'confirmed'] }
+            });
+            
+            const totalAttendees = registrations.reduce((sum, registration) => {
+                return sum + (registration.attendeeCount || 1);
+            }, 0);
+            
+            eventObj.attendeesCount = totalAttendees;
+            return eventObj;
+        }));
+
+        res.json({
+            success: true,
+            data: eventsWithAttendeesCount,
+            total: eventsWithAttendeesCount.length,
+            message: 'Future events (including drafts)'
+        });
+    } catch (error) {
+        console.error('Error fetching future events:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch events',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// @route   GET /api/events/test/:id
+// @desc    Get single future event by ID regardless of status (for debugging)
+// @access  Public
+router.get('/test/:id', async (req, res) => {
+    try {
+        const now = new Date();
+        const event = await Event.findOne({ 
+            _id: req.params.id,
+            date: { $gt: now } // Only future events
+        })
+        .populate('createdBy', 'name email')
+        .select('-attendees'); // Don't expose attendee list publicly
+
+        if (!event) {
+            return res.status(404).json({
+                success: false,
+                message: 'Event not found or is in the past'
+            });
+        }
+
+        // Calculate attendees count for the event
+        const eventObj = event.toObject();
+        
+        // Count total attendees from registrations
+        const registrations = await mongoose.model('Registration').find({
+            eventId: event._id,
+            status: { $in: ['pending', 'confirmed'] }
+        });
+        
+        const totalAttendees = registrations.reduce((sum, registration) => {
+            return sum + (registration.attendeeCount || 1);
+        }, 0);
+        
+        eventObj.attendeesCount = totalAttendees;
+
+        res.json({
+            success: true,
+            data: eventObj
+        });
+    } catch (error) {
+        console.error('Error fetching event:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch event',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
 // @route   GET /api/events
 // @desc    Get all published events (public access)
 // @access  Public
@@ -65,10 +165,28 @@ router.get('/', async (req, res) => {
         // Get total count for pagination
         const total = await Event.countDocuments(filter);
 
+        // Calculate attendees count for each event
+        const eventsWithAttendeesCount = await Promise.all(events.map(async (event) => {
+            const eventObj = event.toObject();
+            
+            // Count total attendees from registrations
+            const registrations = await mongoose.model('Registration').find({
+                eventId: event._id,
+                status: { $in: ['pending', 'confirmed'] }
+            });
+            
+            const totalAttendees = registrations.reduce((sum, registration) => {
+                return sum + (registration.attendeeCount || 1);
+            }, 0);
+            
+            eventObj.attendeesCount = totalAttendees;
+            return eventObj;
+        }));
+
         // Filter by price range if specified
-        let filteredEvents = events;
+        let filteredEvents = eventsWithAttendeesCount;
         if (minPrice || maxPrice) {
-            filteredEvents = events.filter(event => {
+            filteredEvents = eventsWithAttendeesCount.filter(event => {
                 const minEventPrice = Math.min(...event.pricing.map(p => p.price));
                 const maxEventPrice = Math.max(...event.pricing.map(p => p.price));
                 

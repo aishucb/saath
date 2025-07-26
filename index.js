@@ -226,7 +226,27 @@ app.post('/auth/google-signin', async (req, res) => {
       customer.googleId = payload.sub;
       await customer.save();
     }
-    res.json({ success: true, user: customer, registrationStatus });
+
+    // Generate JWT token for the customer
+    const tokenPayload = {
+      _id: customer._id,
+      email: customer.email,
+      name: customer.name,
+      role: 'customer'
+    };
+
+    const token = jwt.sign(
+      tokenPayload,
+      process.env.JWT_SECRET || 'your_jwt_secret',
+      { expiresIn: '7d' }
+    );
+
+    res.json({ 
+      success: true, 
+      user: customer, 
+      registrationStatus,
+      token: token // Include the JWT token in response
+    });
   } catch (err) {
     console.error('Google sign-in error:', err);
     if (err && err.message) {
@@ -313,11 +333,26 @@ app.post('/api/verify-otp', async (req, res) => {
         customerResult = { error: 'Customer DB error: ' + e.message };
       }
       const registrationStatus = customerResult.justAdded ? 'newly_registered' : 'already_registered';
+      
+      // Generate JWT token for the customer
+      const tokenPayload = {
+        _id: customerResult.customer._id,
+        phone: customerResult.customer.phone,
+        role: 'customer'
+      };
+
+      const token = jwt.sign(
+        tokenPayload,
+        process.env.JWT_SECRET || 'your_jwt_secret',
+        { expiresIn: '7d' }
+      );
+
       res.json({
         success: true,
         message: 'OTP verified successfully',
         registrationStatus,
-        customer: customerResult.customer
+        customer: customerResult.customer,
+        token: token // Include the JWT token in response
       });
     } else {
       res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
@@ -331,6 +366,36 @@ app.post('/api/verify-otp', async (req, res) => {
 // Basic route
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to the Saath API' });
+});
+
+// Test token verification endpoint
+app.post('/api/test-token', (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ error: 'Token required' });
+    }
+    
+    console.log('Testing token verification...');
+    console.log('Token:', token.substring(0, 50) + '...');
+    console.log('JWT_SECRET:', process.env.JWT_SECRET || 'your_jwt_secret');
+    
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
+    console.log('Decoded token:', decoded);
+    
+    res.json({ 
+      success: true, 
+      decoded,
+      message: 'Token is valid'
+    });
+  } catch (error) {
+    console.error('Token verification failed:', error.message);
+    res.status(401).json({ 
+      success: false, 
+      error: error.message,
+      message: 'Token is invalid'
+    });
+  }
 });
 
 // Utility function to check if customer exists by phone

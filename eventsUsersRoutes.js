@@ -36,9 +36,13 @@ const userAuth = async (req, res, next) => {
         try {
             // Verify token
             console.log(`🔍 [${requestId}] Verifying user token...`);
+            console.log(`🔍 [${requestId}] JWT_SECRET: ${process.env.JWT_SECRET ? 'Set' : 'Using default'}`);
+            console.log(`🔍 [${requestId}] Token preview: ${token.substring(0, 50)}...`);
+            
             const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
             
             console.log(`✅ [${requestId}] Token verified`);
+            console.log(`🔍 [${requestId}] Decoded token payload:`, decoded);
             
             // Get customer ID from various possible locations in the token
             const customerId = decoded._id || 
@@ -430,6 +434,94 @@ router.get('/filters/options', userAuth, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to get filter options',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// @route   PUT /api/events-users/:id/update-slots
+// @desc    Update available slots for an event based on number of registrations
+// @access  Private (User only)
+router.put('/:id/update-slots', userAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { registrationsCount } = req.body;
+
+        console.log(`🔍 [${req.requestId}] Updating slots for event ${id} with ${registrationsCount} registrations`);
+
+        // Validate input
+        if (typeof registrationsCount !== 'number' || registrationsCount < 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'registrationsCount must be a non-negative number'
+            });
+        }
+
+        // Find the event
+        const event = await Event.findById(id);
+        if (!event) {
+            return res.status(404).json({
+                success: false,
+                message: 'Event not found'
+            });
+        }
+
+        // Check if user has permission to update this event
+        // (Optional: Add organizer check if needed)
+        // if (event.createdBy.toString() !== req.customer._id.toString()) {
+        //     return res.status(403).json({
+        //         success: false,
+        //         message: 'Not authorized to update this event'
+        //     });
+        // }
+
+        // Calculate new available slots
+        const maxAttendees = event.maxAttendees;
+        const newAvailableSlots = Math.max(0, maxAttendees - registrationsCount);
+
+        console.log(`🔍 [${req.requestId}] Event: ${event.eventName}`);
+        console.log(`🔍 [${req.requestId}] Max attendees: ${maxAttendees}`);
+        console.log(`🔍 [${req.requestId}] Current available slots: ${event.availableSlots}`);
+        console.log(`🔍 [${req.requestId}] New registrations count: ${registrationsCount}`);
+        console.log(`🔍 [${req.requestId}] New available slots: ${newAvailableSlots}`);
+
+        // Update the event with new available slots
+        const updatedEvent = await Event.findByIdAndUpdate(
+            id,
+            { 
+                availableSlots: newAvailableSlots,
+                attendeesCount: registrationsCount
+            },
+            { new: true }
+        ).populate('createdBy', 'name email');
+
+        if (!updatedEvent) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to update event slots'
+            });
+        }
+
+        console.log(`✅ [${req.requestId}] Successfully updated slots for event ${id}`);
+
+        res.json({
+            success: true,
+            message: 'Available slots updated successfully',
+            data: {
+                eventId: updatedEvent._id,
+                eventName: updatedEvent.eventName,
+                maxAttendees: updatedEvent.maxAttendees,
+                availableSlots: updatedEvent.availableSlots,
+                attendeesCount: updatedEvent.attendeesCount,
+                updatedAt: updatedEvent.updatedAt
+            }
+        });
+
+    } catch (error) {
+        console.error(`❌ [${req.requestId || 'unknown'}] Error updating event slots:`, error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update available slots',
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
