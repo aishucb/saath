@@ -30,8 +30,10 @@ mongoose.connect(MONGODB_URI, {
 .catch(err => console.error('MongoDB connection error:', err));
 
 // Import models
-const { Customer, Admin, Forum, Message } = require('./models');
+const { Customer, Admin, Forum, Message, Event } = require('./models');
 const adminRoutes = require('./adminRoutes');
+const adminEventsRoutes = require('./adminEventsRoutes');
+const eventsUsersRoutes = require('./eventsUsersRoutes');
 
 // OTP Schema
 const otpSchema = new mongoose.Schema({
@@ -54,18 +56,29 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token']
 }));
 
+// Serve static files (uploaded images)
+app.use('/uploads', express.static('uploads'));
+
 // Import routes
 const forumRoutes = require('./forumRoutes');
 const forumcommentRoutes = require('./forumcomment');
 const auth = require('./middleware/auth');
 const followersRouter = require('./followersRoutes');
 const chatRoutes = require('./chatRoutes');
+const publicEventsRoutes = require('./publicEventsRoutes');
+const eventRegistrationRoutes = require('./eventRegistrationRoutes');
 
 // Use forum routes
 app.use('/api/forum', forumRoutes);
 app.use('/api/forumcomment', forumcommentRoutes);
 app.use('/followers', followersRouter);
 app.use('/api/chat', chatRoutes);
+app.use('/api/admin-events', adminEventsRoutes);
+
+// Mount user events routes
+app.use('/api/events-users', eventsUsersRoutes);
+app.use('/api/events', publicEventsRoutes);
+app.use('/api/event-registrations', eventRegistrationRoutes);
 
 // Session middleware (required for Passport)
 app.use(session({

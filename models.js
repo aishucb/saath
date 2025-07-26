@@ -54,17 +54,150 @@ const messageSchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now }
 });
 
+// Event Schema
+const eventSchema = new mongoose.Schema({
+  eventName: { 
+    type: String, 
+    required: true,
+    trim: true
+  },
+  date: { 
+    type: Date, 
+    required: true
+  },
+  eventTime: {
+    from: { 
+      type: String, 
+      required: true 
+    },
+    to: { 
+      type: String, 
+      required: true 
+    }
+  },
+  place: { 
+    type: String, 
+    required: true,
+    trim: true
+  },
+  tags: [{ 
+    type: String, 
+    trim: true 
+  }],
+  image: { 
+    type: String 
+  },
+  pricing: [{
+    name: { 
+      type: String, 
+      required: true,
+      trim: true
+    },
+    description: { 
+      type: String, 
+      trim: true
+    },
+    price: { 
+      type: Number, 
+      required: true,
+      min: 0
+    },
+    tags: [{ 
+      type: String, 
+      trim: true 
+    }],
+    slotsAvailable: { 
+      type: Number, 
+      required: true,
+      min: 1
+    }
+  }],
+  discountOptions: [{
+    name: { 
+      type: String, 
+      required: true,
+      trim: true
+    },
+    totalMembersNeeded: { 
+      type: Number, 
+      required: true,
+      min: 2
+    },
+    percentageDiscount: { 
+      type: Number, 
+      required: true,
+      min: 1,
+      max: 100
+    }
+  }],
+  organizer: { 
+    type: String, 
+    required: true,
+    trim: true
+  },
+  description: { 
+    type: String, 
+    required: true,
+    trim: true
+  },
+  duration: { 
+    type: String, 
+    required: true,
+    trim: true
+  },
+  maxAttendees: { 
+    type: Number, 
+    required: true,
+    min: 1
+  },
+  availableSlots: { 
+    type: Number, 
+    required: true,
+    min: 1
+  },
+  status: { 
+    type: String, 
+    enum: ['draft', 'published', 'cancelled', 'completed'],
+    default: 'draft'
+  },
+  createdBy: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Admin', 
+    required: true 
+  },
+  attendees: [{ 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Customer' 
+  }],
+  createdAt: { 
+    type: Date, 
+    default: Date.now 
+  },
+  updatedAt: { 
+    type: Date, 
+    default: Date.now 
+  }
+});
+
+// Update timestamp on save
+eventSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
+
 // Create models
 const Customer = mongoose.models.Customer || mongoose.model('Customer', customerSchema);
 const Admin = mongoose.models.Admin || mongoose.model('Admin', adminSchema);
 const Forum = mongoose.models.Forum || mongoose.model('Forum', forumSchema, 'Forum');
 const Comment = mongoose.models.Comment || mongoose.model('Comment', commentSchema);
 const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
+const Event = mongoose.models.Event || mongoose.model('Event', eventSchema);
 
 module.exports = {
   Customer,
   Admin,
   Forum,
   Comment,
-  Message
+  Message,
+  Event
 };
