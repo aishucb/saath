@@ -1,20 +1,48 @@
+/**
+ * Admin Routes
+ * 
+ * This module handles all admin-related API endpoints including authentication,
+ * registration, and profile management for administrative users.
+ * 
+ * Features:
+ * - Admin registration and login
+ * - JWT-based authentication
+ * - Profile management
+ * - Password hashing and validation
+ * 
+ * @author Saath Team
+ * @version 1.0.0
+ */
+
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-// Authentication middleware
+// ============================================================================
+// AUTHENTICATION MIDDLEWARE
+// ============================================================================
+
+/**
+ * Admin Authentication Middleware
+ * 
+ * Validates JWT tokens for admin authentication.
+ * Extracts admin information and attaches it to the request object.
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {void}
+ */
 const auth = async (req, res, next) => {
     const requestId = Math.random().toString(36).substring(2, 8);
-    console.log(`[${requestId}] Auth check for: ${req.method} ${req.path}`);
     
     try {
-        // Get token from header
+        // Extract authorization header
         const authHeader = req.header('Authorization');
         
         if (!authHeader) {
-            console.log(`[${requestId}] No authorization header`);
             return res.status(401).json({ 
                 success: false, 
                 message: 'No token provided'
@@ -22,7 +50,6 @@ const auth = async (req, res, next) => {
         }
 
         if (!authHeader.startsWith('Bearer ')) {
-            console.log(`[${requestId}] Invalid token format`);
             return res.status(401).json({ 
                 success: false, 
                 message: 'Invalid token format'
@@ -32,34 +59,16 @@ const auth = async (req, res, next) => {
         const token = authHeader.replace('Bearer ', '').trim();
         
         try {
-            // Verify token
-            console.log(`🔍 [${requestId}] Verifying token...`);
+            // Verify JWT token
             const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
             
-            console.log(`✅ [${requestId}] Token verified`);
-            console.log(`📝 [${requestId}] Token payload:`, JSON.stringify({
-                id: decoded._id || decoded.id,
-                email: decoded.email,
-                iat: decoded.iat ? new Date(decoded.iat * 1000).toISOString() : null,
-                exp: decoded.exp ? new Date(decoded.exp * 1000).toISOString() : null
-            }, null, 2));
-            
-            // Get admin ID from various possible locations in the token
+            // Extract admin ID from various possible token structures
             const adminId = decoded._id || 
                            (decoded.admin && decoded.admin.id) || 
                            decoded.id || 
                            (decoded.admin && decoded.admin._id);
 
-            console.log(`🔍 [${requestId}] Extracted admin ID:`, adminId);
-            console.log(`🔍 [${requestId}] Full decoded token:`, JSON.stringify(decoded, null, 2));
-
             if (!adminId) {
-                const error = new Error('No admin ID found in token');
-                console.error(`❌ [${requestId}] ${error.message}`, { 
-                    decodedKeys: Object.keys(decoded),
-                    hasAdmin: !!decoded.admin,
-                    decodedAdmin: decoded.admin ? Object.keys(decoded.admin) : 'no admin object'
-                });
                 return res.status(401).json({ 
                     success: false, 
                     message: 'Admin not found' 
@@ -69,7 +78,6 @@ const auth = async (req, res, next) => {
             // Find admin by ID
             const admin = await Admin.findById(adminId).select('-password');
             if (!admin) {
-                console.log(`[${requestId}] Admin not found for ID:`, adminId);
                 return res.status(401).json({ 
                     success: false, 
                     message: 'Admin not found' 
@@ -80,11 +88,8 @@ const auth = async (req, res, next) => {
             req.admin = admin;
             req.requestId = requestId;
             
-            console.log(`[${requestId}] Authenticated as:`, admin.email);
             next();
         } catch (error) {
-            console.error(`[${requestId}] Auth failed:`, error.message);
-            
             const errorMessage = error.name === 'TokenExpiredError' 
                 ? 'Token has expired' 
                 : 'Invalid token';
@@ -95,11 +100,7 @@ const auth = async (req, res, next) => {
             });
         }
     } catch (err) {
-        console.error(`❌ [${requestId || 'unknown'}] Unexpected error in auth middleware:`, {
-            message: err.message,
-            name: err.name,
-            stack: err.stack
-        });
+        console.error('Unexpected error in auth middleware:', err.message);
         
         res.status(500).json({
             success: false,
@@ -111,10 +112,24 @@ const auth = async (req, res, next) => {
     }
 };
 
+// ============================================================================
+// ADMIN MODEL
+// ============================================================================
+
 // Constants
 const saltRounds = 10;
 
-// Admin Schema
+/**
+ * Admin Schema
+ * 
+ * Defines the structure for admin users with email validation,
+ * password requirements, and automatic password hashing.
+ * 
+ * @field email - Unique email address with validation
+ * @field password - Hashed password with minimum length
+ * @field name - Admin display name
+ * @field createdAt - Account creation timestamp
+ */
 const adminSchema = new mongoose.Schema({
     email: { 
         type: String, 
@@ -140,7 +155,11 @@ const adminSchema = new mongoose.Schema({
     }
 });
 
-// Hash password before saving
+/**
+ * Pre-save Middleware for Password Hashing
+ * 
+ * Automatically hashes passwords before saving to the database.
+ */
 adminSchema.pre('save', async function(next) {
     if (this.isModified('password')) {
         const salt = await bcrypt.genSalt(10);
@@ -152,19 +171,43 @@ adminSchema.pre('save', async function(next) {
 // Create Admin model if it doesn't exist
 const Admin = mongoose.models.Admin || mongoose.model('Admin', adminSchema, 'Admins');
 
-// Simple hello endpoint
+// ============================================================================
+// BASIC ROUTES
+// ============================================================================
+
+/**
+ * Hello Endpoint
+ * GET /api/admin/hello
+ * 
+ * Simple test endpoint to verify admin routes are working.
+ * 
+ * @returns {Object} Hello message
+ */
 router.get('/hello', (req, res) => {
     res.json({ message: 'Hello from admin routes!' });
 });
 
-// @route   POST /api/admin/register
-// @desc    Register a new admin
-// @access  Public (should be protected in production)
+// ============================================================================
+// AUTHENTICATION ROUTES
+// ============================================================================
+
+/**
+ * Register New Admin
+ * POST /api/admin/register
+ * 
+ * Creates a new admin account with email validation and password hashing.
+ * This endpoint should be protected in production environments.
+ * 
+ * @param {string} email - Admin email address
+ * @param {string} password - Admin password (minimum 6 characters)
+ * @param {string} name - Admin display name
+ * @returns {Object} Registration confirmation and admin details
+ */
 router.post('/register', async (req, res) => {
     try {
         const { email, password, name } = req.body;
 
-        // Validation
+        // Validate required fields
         if (!email || !password || !name) {
             return res.status(400).json({ 
                 success: false, 
@@ -211,21 +254,24 @@ router.post('/register', async (req, res) => {
     }
 });
 
-// @route   POST /api/admin/login
-// @desc    Authenticate admin & get token
-// @access  Public
+/**
+ * Admin Login
+ * POST /api/admin/login
+ * 
+ * Authenticates admin credentials and returns a JWT token for subsequent requests.
+ * 
+ * @param {string} email - Admin email address
+ * @param {string} password - Admin password
+ * @returns {Object} JWT token and admin information
+ */
 router.post('/login', async (req, res) => {
     const requestId = Math.random().toString(36).substring(2, 8);
     
     try {
-        console.log(`\n🔵 [${requestId}] ===== LOGIN REQUEST =====`);
-        console.log(`[${requestId}] Request body:`, JSON.stringify(req.body, null, 2));
-
         const { email, password } = req.body;
 
-        // Validation
+        // Validate required fields
         if (!email || !password) {
-            console.log(`[${requestId}] ❌ Validation failed - missing email or password`);
             return res.status(400).json({ 
                 success: false, 
                 message: 'Please provide both email and password',
@@ -234,13 +280,11 @@ router.post('/login', async (req, res) => {
         }
 
         // Check if admin exists
-        console.log(`[${requestId}] 🔍 Looking for admin with email:`, email);
         let admin;
         try {
             admin = await Admin.findOne({ email }).select('+password').lean();
-            console.log(`[${requestId}] Admin found:`, admin ? 'Yes' : 'No');
         } catch (dbError) {
-            console.error(`[${requestId}] ❌ Database error:`, dbError);
+            console.error('Database error during login:', dbError);
             return res.status(500).json({
                 success: false,
                 message: 'Database error',
@@ -250,7 +294,6 @@ router.post('/login', async (req, res) => {
         }
 
         if (!admin) {
-            console.log(`[${requestId}] ❌ No admin found with email:`, email);
             return res.status(400).json({ 
                 success: false, 
                 message: 'Invalid credentials',
@@ -258,18 +301,24 @@ router.post('/login', async (req, res) => {
             });
         }
 
-        // Check password
-        console.log(`[${requestId}] 🔑 Checking password...`);
+        // Verify password
         let isMatch = false;
         try {
             isMatch = await bcrypt.compare(password, admin.password);
-            console.log(`[${requestId}] Password match:`, isMatch);
         } catch (bcryptError) {
-            console.error(`[${requestId}] ❌ Bcrypt error:`, bcryptError);
+            console.error('Bcrypt error during login:', bcryptError);
             return res.status(500).json({
                 success: false,
                 message: 'Authentication error',
                 error: bcryptError.message,
+                requestId
+            });
+        }
+
+        if (!isMatch) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid credentials',
                 requestId
             });
         }
@@ -283,7 +332,7 @@ router.post('/login', async (req, res) => {
                 role: 'admin'
             };
 
-            // Sign token
+            // Sign JWT token
             const token = jwt.sign(
                 payload,
                 process.env.JWT_SECRET || 'your_jwt_secret',
@@ -292,8 +341,6 @@ router.post('/login', async (req, res) => {
 
             // Remove password from response
             const { password: _, ...adminWithoutPassword } = admin;
-
-            console.log(`[${requestId}] ✅ Login successful for admin:`, admin.email);
             
             res.json({
                 success: true,
@@ -302,7 +349,7 @@ router.post('/login', async (req, res) => {
                 requestId
             });
         } catch (tokenError) {
-            console.error(`[${requestId}] ❌ Token generation error:`, tokenError);
+            console.error('Token generation error:', tokenError);
             return res.status(500).json({
                 success: false,
                 message: 'Error generating authentication token',
@@ -312,14 +359,7 @@ router.post('/login', async (req, res) => {
         }
 
     } catch (error) {
-        console.error('❌ [LOGIN ERROR]', {
-            message: error.message,
-            stack: error.stack,
-            name: error.name,
-            code: error.code,
-            requestBody: req.body,
-            timestamp: new Date().toISOString()
-        });
+        console.error('Login error:', error.message);
         
         // Don't expose internal errors in production
         const errorMessage = process.env.NODE_ENV === 'development' 
@@ -336,100 +376,31 @@ router.post('/login', async (req, res) => {
     }
 });
 
-// @route   GET /api/admin/me
-// @desc    Get current admin
-// @access  Private
+/**
+ * Get Current Admin Profile
+ * GET /api/admin/me
+ * 
+ * Retrieves the current admin's profile information.
+ * Requires authentication via Authorization header.
+ * 
+ * @returns {Object} Admin profile information
+ */
 router.get('/me', auth, async (req, res) => {
     const requestId = req.requestId || Math.random().toString(36).substring(2, 8);
-    const requestTime = new Date().toISOString();
-    
-    console.log(`\n🔵 [${requestId}] ===== /me ENDPOINT HIT =====`);
-    console.log(`📡 [${requestId}] ${requestTime} - ${req.method} ${req.originalUrl}`);
     
     try {
         if (!req.admin) {
-            console.error(`❌ [${requestId}] No admin found in request object`);
             return res.status(401).json({ 
                 success: false, 
                 message: 'Not authenticated',
                 requestId
             });
         }
-        // 1. Log basic request info
-        console.log(`\n📋 [${requestId}] === REQUEST DETAILS ===`);
-        console.log(`🕒 Timestamp: ${requestTime}`);
-        console.log(`🌐 IP: ${req.ip || req.connection.remoteAddress || 'unknown'}`);
-        console.log(`🖥️  User Agent: ${req.get('user-agent') || 'none'}`);
-        console.log(`📡 Method: ${req.method}`);
-        console.log(`🔗 URL: ${req.originalUrl}`);
-        
-        // 2. Log headers
-        console.log(`\n📦 [${requestId}] === HEADERS ===`);
-        const headers = {};
-        Object.keys(req.headers).forEach(key => {
-            if (key.toLowerCase() === 'authorization') {
-                const authParts = req.headers[key].split('.');
-                headers[key] = `Bearer ${authParts[0]}.${'*'.repeat(10)}.${authParts[2] || ''}`;
-            } else {
-                headers[key] = req.headers[key];
-            }
-        });
-        console.log(JSON.stringify(headers, null, 2));
-        
-        // 3. Log authentication details
-        console.log(`\n🔑 [${requestId}] === AUTHENTICATION ===`);
-        const authHeader = req.headers.authorization || req.headers.Authorization || '';
-        const token = authHeader.split(' ')[1] || '';
-        
-        console.log(`🔒 Auth Header: ${authHeader ? 'Present' : 'Missing'}`);
-        console.log(`🔑 Token Length: ${token.length} characters`);
-        console.log(`👤 Authenticated: ${!!req.admin ? 'Yes' : 'No'}`);
-        
-        if (req.admin) {
-            console.log(`👤 Admin ID: ${req.admin._id || 'none'}`);
-            console.log(`📧 Admin Email: ${req.admin.email || 'none'}`);
-        }
-        
-        // 4. Log request body if present
-        if (req.body && Object.keys(req.body).length > 0) {
-            console.log(`\n📝 [${requestId}] === REQUEST BODY ===`);
-            console.log(JSON.stringify(req.body, null, 2));
-        }
-        
-        // 5. Log query parameters if present
-        if (req.query && Object.keys(req.query).length > 0) {
-            console.log(`\n🔍 [${requestId}] === QUERY PARAMETERS ===`);
-            console.log(JSON.stringify(req.query, null, 2));
-        }
-        
-        // 6. Check if admin exists in request (from auth middleware)
-        if (!req.admin) {
-            console.error(`\n❌ [${requestId}] === AUTHENTICATION FAILED ===`);
-            console.error('No admin found in request object');
-            console.error('Auth header present:', !!authHeader);
-            console.error('Token present:', !!token);
-            
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Not authenticated',
-                receivedToken: !!authHeader,
-                requestId,
-                timestamp: requestTime
-            });
-        }
-        
-        // 7. Log successful authentication
-        console.log(`\n✅ [${requestId}] === AUTHENTICATION SUCCESSFUL ===`);
-        console.log(`👤 Admin ID: ${req.admin._id}`);
-        console.log(`📧 Email: ${req.admin.email}`);
-        console.log(`🔄 Request ID: ${requestId}`);
 
         // Convert Mongoose document to plain object and remove sensitive data
         const adminData = req.admin.toObject ? req.admin.toObject() : req.admin;
         delete adminData.password;
         delete adminData.__v;
-        
-        console.log('✅ Sending admin data:', JSON.stringify(adminData, null, 2));
         
         res.json({
             success: true,
@@ -442,18 +413,7 @@ router.get('/me', auth, async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Error in /me endpoint:', {
-            message: error.message,
-            name: error.name,
-            stack: error.stack,
-            timestamp: new Date().toISOString(),
-            request: {
-                method: req.method,
-                url: req.originalUrl,
-                headers: req.headers,
-                body: req.body
-            }
-        });
+        console.error('Error in /me endpoint:', error.message);
         
         res.status(500).json({
             success: false,
@@ -468,7 +428,19 @@ router.get('/me', auth, async (req, res) => {
     }
 });
 
-// Temporary route to create an admin (remove in production)
+// ============================================================================
+// DEVELOPMENT ROUTES (REMOVE IN PRODUCTION)
+// ============================================================================
+
+/**
+ * Create Default Admin (Development Only)
+ * POST /api/admin/create-admin
+ * 
+ * Creates a default admin account for development purposes.
+ * This route should be removed in production.
+ * 
+ * @returns {Object} Default admin credentials and token
+ */
 router.post('/create-admin', async (req, res) => {
     try {
         const { name, email, password } = {
@@ -535,7 +507,15 @@ router.post('/create-admin', async (req, res) => {
     }
 });
 
-// Temporary route to list all admins (remove in production)
+/**
+ * List All Admins (Development Only)
+ * GET /api/admin/list-admins
+ * 
+ * Lists all admin accounts for development purposes.
+ * This route should be removed in production.
+ * 
+ * @returns {Object} List of all admin accounts
+ */
 router.get('/list-admins', async (req, res) => {
     try {
         const admins = await Admin.find({});

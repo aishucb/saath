@@ -1,22 +1,52 @@
+/**
+ * Event Registration Routes
+ * 
+ * This module handles all event registration-related API endpoints.
+ * Customers can register for events, view their registrations, cancel them,
+ * and admins can manage check-ins.
+ * 
+ * Features:
+ * - Customer event registration with pricing tiers
+ * - Registration management (view, cancel)
+ * - Attendee check-in system
+ * - Discount application for group registrations
+ * - Slot availability management
+ * 
+ * @author Saath Team
+ * @version 1.0.0
+ */
+
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 
-// Import models
+// Import database models
 const { Event, Customer } = require('./models');
 
-// Authentication middleware for customers
+// ============================================================================
+// CUSTOMER AUTHENTICATION MIDDLEWARE
+// ============================================================================
+
+/**
+ * Customer Authentication Middleware
+ * 
+ * Validates JWT tokens for customer authentication.
+ * Extracts customer information and attaches it to the request object.
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {void}
+ */
 const customerAuth = async (req, res, next) => {
     const requestId = Math.random().toString(36).substring(2, 8);
-    console.log(`[${requestId}] Customer auth check for: ${req.method} ${req.path}`);
     
     try {
-        // Get token from header
+        // Extract authorization header
         const authHeader = req.header('Authorization');
         
         if (!authHeader) {
-            console.log(`[${requestId}] No authorization header`);
             return res.status(401).json({ 
                 success: false, 
                 message: 'No token provided'
@@ -24,7 +54,6 @@ const customerAuth = async (req, res, next) => {
         }
 
         if (!authHeader.startsWith('Bearer ')) {
-            console.log(`[${requestId}] Invalid token format`);
             return res.status(401).json({ 
                 success: false, 
                 message: 'Invalid token format'
@@ -35,27 +64,16 @@ const customerAuth = async (req, res, next) => {
         
         try {
             // Verify JWT token
-            console.log(`🔍 [${requestId}] Verifying customer token...`);
-            console.log(`🔍 [${requestId}] JWT_SECRET: ${process.env.JWT_SECRET ? 'Set' : 'Using default'}`);
-            console.log(`🔍 [${requestId}] Token preview: ${token.substring(0, 50)}...`);
-            
             const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
             
-            console.log(`✅ [${requestId}] Token verified`);
-            console.log(`🔍 [${requestId}] Decoded token payload:`, decoded);
-            
-            // Get customer ID from various possible locations in the token
+            // Extract customer ID from various possible token structures
             const customerId = decoded._id || 
                               (decoded.customer && decoded.customer.id) || 
                               decoded.id || 
                               (decoded.customer && decoded.customer._id) ||
                               decoded.customerId;
 
-            console.log(`🔍 [${requestId}] Extracted customer ID:`, customerId);
-
             if (!customerId) {
-                const error = new Error('No customer ID found in token');
-                console.error(`❌ [${requestId}] ${error.message}`);
                 return res.status(401).json({ 
                     success: false, 
                     message: 'Customer not found' 
@@ -65,7 +83,6 @@ const customerAuth = async (req, res, next) => {
             // Find customer by ID
             const customer = await Customer.findById(customerId);
             if (!customer) {
-                console.log(`[${requestId}] Customer not found for ID:`, customerId);
                 return res.status(401).json({ 
                     success: false, 
                     message: 'Customer not found' 
@@ -76,11 +93,8 @@ const customerAuth = async (req, res, next) => {
             req.customer = customer;
             req.requestId = requestId;
             
-            console.log(`[${requestId}] Authenticated as customer:`, customer.email || customer.phone);
             next();
         } catch (error) {
-            console.error(`[${requestId}] Auth failed:`, error.message);
-            
             const errorMessage = error.name === 'TokenExpiredError' 
                 ? 'Token has expired' 
                 : 'Invalid token';
@@ -91,11 +105,7 @@ const customerAuth = async (req, res, next) => {
             });
         }
     } catch (err) {
-        console.error(`❌ [${requestId || 'unknown'}] Unexpected error in customer auth middleware:`, {
-            message: err.message,
-            name: err.name,
-            stack: err.stack
-        });
+        console.error('Unexpected error in customer auth middleware:', err.message);
         
         res.status(500).json({
             success: false,
@@ -107,7 +117,28 @@ const customerAuth = async (req, res, next) => {
     }
 };
 
-// Registration Schema
+// ============================================================================
+// REGISTRATION MODEL
+// ============================================================================
+
+/**
+ * Registration Schema
+ * 
+ * Defines the structure for event registrations with comprehensive
+ * tracking of pricing, discounts, payment status, and check-in information.
+ * 
+ * @field eventId - Reference to the event
+ * @field customerId - Reference to the customer
+ * @field pricingTier - Selected pricing tier details
+ * @field attendeeCount - Number of attendees
+ * @field appliedDiscount - Applied discount information
+ * @field registrationDate - Registration timestamp
+ * @field status - Registration status (pending/confirmed/cancelled/refunded)
+ * @field paymentStatus - Payment status (pending/paid/failed/refunded)
+ * @field specialRequests - Customer special requests
+ * @field checkInStatus - Check-in status (not-checked-in/checked-in)
+ * @field checkInTime - Check-in timestamp
+ */
 const registrationSchema = new mongoose.Schema({
     eventId: { 
         type: mongoose.Schema.Types.ObjectId, 
@@ -166,7 +197,18 @@ const registrationSchema = new mongoose.Schema({
 // Create Registration model
 const Registration = mongoose.models.Registration || mongoose.model('Registration', registrationSchema);
 
-// Debug endpoint to test authentication
+// ============================================================================
+// DEBUG ROUTES
+// ============================================================================
+
+/**
+ * Debug Authentication Endpoint
+ * POST /api/event-registrations/debug
+ * 
+ * Tests customer authentication for debugging purposes.
+ * 
+ * @returns {Object} Authentication status and customer information
+ */
 router.post('/debug', customerAuth, async (req, res) => {
   res.json({ 
     success: true, 
@@ -179,9 +221,24 @@ router.post('/debug', customerAuth, async (req, res) => {
   });
 });
 
-// @route   POST /api/event-registrations
-// @desc    Register for an event
-// @access  Private (Customer)
+// ============================================================================
+// REGISTRATION MANAGEMENT ROUTES
+// ============================================================================
+
+/**
+ * Register for an Event
+ * POST /api/event-registrations
+ * 
+ * Creates a new event registration for the authenticated customer.
+ * Handles pricing tier selection, discount application, and slot management.
+ * 
+ * @param {string} eventId - Event ID to register for
+ * @param {string} pricingTierName - Name of the pricing tier
+ * @param {number} attendeeCount - Number of attendees (default: 1)
+ * @param {string} appliedDiscountName - Name of discount to apply (optional)
+ * @param {string} specialRequests - Special requests from customer (optional)
+ * @returns {Object} Registration details
+ */
 router.post('/', customerAuth, async (req, res) => {
     try {
         const {
@@ -200,7 +257,7 @@ router.post('/', customerAuth, async (req, res) => {
             });
         }
 
-        // Check if event exists and is published (or draft for development)
+        // Check if event exists and is available for registration
         const event = await Event.findOne({ 
             _id: eventId, 
             status: { $in: ['published', 'draft'] } // Allow draft events for development
@@ -281,7 +338,7 @@ router.post('/', customerAuth, async (req, res) => {
             appliedDiscount,
             specialRequests,
             finalPrice,
-            attendeeCount // Add attendee count to registration
+            attendeeCount
         });
 
         await registration.save();
@@ -308,9 +365,19 @@ router.post('/', customerAuth, async (req, res) => {
     }
 });
 
-// @route   GET /api/event-registrations/my-registrations
-// @desc    Get customer's registrations
-// @access  Private (Customer)
+/**
+ * Get Customer's Registrations
+ * GET /api/event-registrations/my-registrations
+ * 
+ * Retrieves all registrations for the authenticated customer with pagination.
+ * 
+ * Query Parameters:
+ * @param {string} status - Filter by registration status (optional)
+ * @param {number} page - Page number for pagination (default: 1)
+ * @param {number} limit - Items per page (default: 10)
+ * 
+ * @returns {Object} Paginated list of customer registrations
+ */
 router.get('/my-registrations', customerAuth, async (req, res) => {
     try {
         const { status, page = 1, limit = 10 } = req.query;
@@ -346,9 +413,15 @@ router.get('/my-registrations', customerAuth, async (req, res) => {
     }
 });
 
-// @route   GET /api/event-registrations/:id
-// @desc    Get single registration
-// @access  Private (Customer)
+/**
+ * Get Single Registration
+ * GET /api/event-registrations/:id
+ * 
+ * Retrieves details of a specific registration for the authenticated customer.
+ * 
+ * @param {string} id - Registration ID
+ * @returns {Object} Registration details with event information
+ */
 router.get('/:id', customerAuth, async (req, res) => {
     try {
         const registration = await Registration.findOne({
@@ -377,9 +450,16 @@ router.get('/:id', customerAuth, async (req, res) => {
     }
 });
 
-// @route   PATCH /api/event-registrations/:id/cancel
-// @desc    Cancel registration
-// @access  Private (Customer)
+/**
+ * Cancel Registration
+ * PATCH /api/event-registrations/:id/cancel
+ * 
+ * Cancels a customer's registration and updates event slot availability.
+ * Cannot cancel paid registrations (requires refund process).
+ * 
+ * @param {string} id - Registration ID
+ * @returns {Object} Cancellation confirmation
+ */
 router.patch('/:id/cancel', customerAuth, async (req, res) => {
     try {
         const registration = await Registration.findOne({
@@ -436,9 +516,20 @@ router.patch('/:id/cancel', customerAuth, async (req, res) => {
     }
 });
 
-// @route   PATCH /api/event-registrations/:id/check-in
-// @desc    Check in attendee (Admin only)
-// @access  Private (Admin)
+// ============================================================================
+// ADMIN ROUTES
+// ============================================================================
+
+/**
+ * Check-in Attendee (Admin Only)
+ * PATCH /api/event-registrations/:id/check-in
+ * 
+ * Marks an attendee as checked in for an event.
+ * This route should be protected with admin authentication in production.
+ * 
+ * @param {string} id - Registration ID
+ * @returns {Object} Check-in confirmation
+ */
 router.patch('/:id/check-in', async (req, res) => {
     try {
         const registration = await Registration.findById(req.params.id)
