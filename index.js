@@ -78,7 +78,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // CORS configuration for cross-origin requests
 app.use(cors({
-  origin: ['http://localhost:5173', 'https://yourdomain.com', 'http://yourdomain.com', 'https://admin.yourdomain.com'], // Replace 'yourdomain.com' with your actual domain
+  origin: ['http://localhost:5173', 'http://admin.love-guru.xyz', 'https://admin.love-guru.xyz', 'http://13.239.184.90:3000'], // Updated with actual domain
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token']
